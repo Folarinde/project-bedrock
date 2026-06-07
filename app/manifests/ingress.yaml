@@ -7,7 +7,7 @@ metadata:
     project: karatu-2025-capstone
   annotations:
     # Tell Kubernetes to use the AWS Load Balancer Controller
-    kubernetes.io/ingress.class: alb
+    spec.ingressClassName: alb
 
     # Create an internet-facing ALB (public)
     alb.ingress.kubernetes.io/scheme: internet-facing
