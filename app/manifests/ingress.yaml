@@ -1,0 +1,38 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: retail-app-ingress
+  namespace: retail-app
+  labels:
+    project: karatu-2025-capstone
+  annotations:
+    # Tell Kubernetes to use the AWS Load Balancer Controller
+    kubernetes.io/ingress.class: alb
+
+    # Create an internet-facing ALB (public)
+    alb.ingress.kubernetes.io/scheme: internet-facing
+
+    # Use IP mode — routes directly to pod IPs
+    alb.ingress.kubernetes.io/target-type: ip
+
+    # Listen on port 80
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}]'
+
+    # Health check configuration
+    alb.ingress.kubernetes.io/healthcheck-path: /
+    alb.ingress.kubernetes.io/healthcheck-interval-seconds: "30"
+    alb.ingress.kubernetes.io/success-codes: "200-399"
+
+    # Tag the ALB for project identification
+    alb.ingress.kubernetes.io/tags: Project=karatu-2025-capstone
+spec:
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ui
+                port:
+                  number: 80

@@ -1,0 +1,180 @@
+name: "Terraform Plan"
+
+# ─────────────────────────────────────────
+# Trigger: runs on every Pull Request
+# that touches Terraform files
+# ─────────────────────────────────────────
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "terraform/**"
+      - ".github/workflows/terraform-plan.yml"
+
+# Cancel any in-progress run for the same PR
+# Prevents multiple plans running simultaneously
+concurrency:
+  group: terraform-plan-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+# Minimum permissions needed
+permissions:
+  contents: read        # checkout the code
+  pull-requests: write  # post the plan as a PR comment
+  id-token: write       # needed for OIDC authentication
+
+jobs:
+  terraform-plan:
+    name: "Terraform Plan"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        # All terraform commands run from the terraform/ folder
+        working-directory: terraform
+
+    steps:
+      # ── Step 1: Checkout the code ──────────────────────
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # ── Step 2: Authenticate with AWS ──────────────────
+      # OIDC method — no static credentials stored
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+          role-session-name: GitHubActions-Plan-${{ github.run_id }}
+
+      # ── Fallback: use this block instead if using Access Keys ──
+      # - name: Configure AWS Credentials (Access Keys)
+      #   uses: aws-actions/configure-aws-credentials@v4
+      #   with:
+      #     aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      #     aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      #     aws-region: us-east-1
+
+      # ── Step 3: Install Terraform ───────────────────────
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.0"
+          # Makes terraform output available to subsequent steps
+          terraform_wrapper: true
+
+      # ── Step 4: Format check ────────────────────────────
+      - name: Terraform Format Check
+        id: fmt
+        run: terraform fmt -check -recursive
+        continue-on-error: true
+        # We use continue-on-error so the plan still runs
+        # but the format status is reported in the PR comment
+
+      # ── Step 5: Initialise ──────────────────────────────
+      - name: Terraform Init
+        id: init
+        run: |
+          terraform init \
+            -backend-config="bucket=bedrock-tf-state-${{ vars.STUDENT_ID }}" \
+            -backend-config="key=project-bedrock/terraform.tfstate" \
+            -backend-config="region=us-east-1" \
+            -input=false
+
+      # ── Step 6: Validate ────────────────────────────────
+      - name: Terraform Validate
+        id: validate
+        run: terraform validate -no-color
+
+      # ── Step 7: Plan ────────────────────────────────────
+      - name: Terraform Plan
+        id: plan
+        run: |
+          terraform plan \
+            -no-color \
+            -input=false \
+            -out=tfplan.binary \
+            -var="db_password=${{ secrets.TF_VAR_db_password }}" \
+            -var="console_password=${{ secrets.TF_VAR_console_password }}" \
+            -var="student_id=${{ secrets.TF_VAR_student_id }}"
+        continue-on-error: true
+        # continue-on-error lets us post the failure
+        # as a PR comment rather than just failing silently
+
+      # ── Step 8: Convert plan to readable text ───────────
+      - name: Show Plan Output
+        id: show
+        run: |
+          terraform show -no-color tfplan.binary > plan_output.txt
+          echo "PLAN_OUTPUT<<EOF" >> $GITHUB_OUTPUT
+          head -200 plan_output.txt >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+        continue-on-error: true
+
+      # ── Step 9: Post plan as PR comment ─────────────────
+      - name: Post Plan to PR
+        uses: actions/github-script@v7
+        if: github.event_name == 'pull_request'
+        env:
+          PLAN: ${{ steps.show.outputs.PLAN_OUTPUT }}
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            // Find any existing plan comment to update it
+            // instead of creating a new one on every push
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const botComment = comments.find(comment => {
+              return comment.user.type === 'Bot' &&
+                     comment.body.includes('Terraform Plan Results');
+            });
+
+            const output = `## 🏗️ Terraform Plan Results
+
+            | Step | Result |
+            |------|--------|
+            | 🖊️ Format | \`${{ steps.fmt.outcome }}\` |
+            | ⚙️ Init | \`${{ steps.init.outcome }}\` |
+            | 🤖 Validate | \`${{ steps.validate.outcome }}\` |
+            | 📖 Plan | \`${{ steps.plan.outcome }}\` |
+
+            <details>
+            <summary>📋 Click to expand full plan output</summary>
+
+            \`\`\`terraform
+            ${process.env.PLAN}
+            \`\`\`
+
+            </details>
+
+            > 🔍 Pushed by: @${{ github.actor }}
+            > 📌 Workflow: \`${{ github.workflow }}\`
+            > ⏱️ Run: [\`${{ github.run_id }}\`](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})`;
+
+            // Update existing comment or create new one
+            if (botComment) {
+              github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: output
+              });
+            } else {
+              github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: output
+              });
+            }
+
+      # ── Step 10: Fail if plan failed ────────────────────
+      - name: Check Plan Status
+        if: steps.plan.outcome == 'failure'
+        run: |
+          echo "❌ Terraform plan failed. Check the PR comment for details."
+          exit 1

@@ -22,3 +22,11 @@ output "assets_bucket_name" {
   description = "S3 assets bucket name"
   value       = module.s3_lambda.assets_bucket_name
 }
+
+output "dev_secret_access_key" {
+  description = "Secret Access Key for bedrock-dev-view"
+  value       = module.iam.dev_secret_access_key
+  sensitive   = true
+  # Run: terraform output dev_secret_access_key
+  # to retrieve this value after apply
+}

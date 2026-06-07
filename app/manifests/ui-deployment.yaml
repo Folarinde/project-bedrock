@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ui
+  namespace: retail-app
+  labels:
+    app: ui
+    project: karatu-2025-capstone
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ui
+  template:
+    metadata:
+      labels:
+        app: ui
+    spec:
+      containers:
+        - name: ui
+          image: public.ecr.aws/aws-containers/retail-store-sample-ui:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: CATALOG_URL
+              value: "http://catalog"
+            - name: ORDERS_URL
+              value: "http://orders"
+            - name: CHECKOUT_URL
+              value: "http://checkout"
+            - name: CART_URL
+              value: "http://cart"
+            - name: ASSETS_URL
+              value: "http://assets"
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "128m"
+            limits:
+              memory: "512Mi"
+              cpu: "256m"
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ui
+  namespace: retail-app
+spec:
+  selector:
+    app: ui
+  ports:
+    - port: 80
+      targetPort: 8080

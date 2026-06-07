@@ -12,3 +12,5 @@ override.tf
 
 # OS files
 .DS_Store
+kubectl
+kubectl.sha256

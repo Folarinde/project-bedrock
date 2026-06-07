@@ -1,0 +1,103 @@
+name: "Terraform Apply"
+
+# ─────────────────────────────────────────
+# Trigger: runs only when a PR is merged
+# into main — not on direct pushes
+# ─────────────────────────────────────────
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "terraform/**"
+      - ".github/workflows/terraform-apply.yml"
+
+# Only one apply can run at a time
+# Prevents race conditions on live infrastructure
+concurrency:
+  group: terraform-apply
+  cancel-in-progress: false  # never cancel an in-progress apply
+
+permissions:
+  contents: read
+  id-token: write
+  # Apply workflow doesn't need PR write permissions
+
+jobs:
+  terraform-apply:
+    name: "Terraform Apply"
+    runs-on: ubuntu-latest
+    environment: production  # requires manual approval in GitHub Environments
+    defaults:
+      run:
+        working-directory: terraform
+
+    steps:
+      # ── Step 1: Checkout ────────────────────────────────
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # ── Step 2: Authenticate with AWS ──────────────────
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+          role-session-name: GitHubActions-Apply-${{ github.run_id }}
+
+      # ── Step 3: Install Terraform ───────────────────────
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.0"
+          terraform_wrapper: true
+
+      # ── Step 4: Initialise ──────────────────────────────
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="bucket=bedrock-tf-state-${{ vars.STUDENT_ID }}" \
+            -backend-config="key=project-bedrock/terraform.tfstate" \
+            -backend-config="region=us-east-1" \
+            -input=false
+
+      # ── Step 5: Validate ────────────────────────────────
+      - name: Terraform Validate
+        run: terraform validate -no-color
+
+      # ── Step 6: Plan before applying ────────────────────
+      # Always plan before applying — even on merge
+      # This gives a final review in the Actions log
+      - name: Terraform Plan
+        run: |
+          terraform plan \
+            -no-color \
+            -input=false \
+            -out=tfplan.binary \
+            -var="db_password=${{ secrets.TF_VAR_db_password }}" \
+            -var="console_password=${{ secrets.TF_VAR_console_password }}" \
+            -var="student_id=${{ secrets.TF_VAR_student_id }}"
+
+      # ── Step 7: Apply ────────────────────────────────────
+      - name: Terraform Apply
+        run: |
+          terraform apply \
+            -auto-approve \
+            -no-color \
+            -input=false \
+            tfplan.binary
+
+      # ── Step 8: Capture outputs ─────────────────────────
+      - name: Capture Terraform Outputs
+        run: |
+          terraform output -json > ../grading.json
+          echo "✅ grading.json generated successfully"
+          cat ../grading.json
+
+      # ── Step 9: Commit grading.json back to repo ────────
+      - name: Commit grading.json
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "ci: update grading.json after terraform apply [skip ci]"
+          file_pattern: "grading.json"
+          branch: main
