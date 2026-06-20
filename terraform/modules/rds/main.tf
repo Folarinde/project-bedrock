@@ -158,7 +158,7 @@ resource "aws_secretsmanager_secret_version" "mysql_with_host" {
 resource "aws_db_instance" "postgres" {
   identifier        = "${var.cluster_name}-postgres"
   engine            = "postgres"
-  engine_version    = "15.12"
+  engine_version    = "15.13"
   instance_class    = var.instance_class
   allocated_storage = 20
   storage_type      = "gp2"
